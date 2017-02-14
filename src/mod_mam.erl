@@ -34,16 +34,18 @@
 
 -export([user_send_packet/1, user_send_packet_strip_tag/1, user_receive_packet/1,
 	 process_iq_v0_2/1, process_iq_v0_3/1, disco_sm_features/5,
-	 remove_user/2, remove_room/3, mod_opt_type/1, muc_process_iq/2,
+	 remove_user/2, remove_room/3, mod_opt_type/1, muc_process_iq/2, pubsub_process_iq/2,
 	 muc_filter_message/5, message_is_archived/3, delete_old_messages/2,
 	 get_commands_spec/0, msg_to_el/4, get_room_config/4, set_room_option/3,
 	 offline_message/4]).
 
+-include("jlib.hrl").
 -include("xmpp.hrl").
 -include("logger.hrl").
 -include("mod_muc_room.hrl").
 -include("ejabberd_commands.hrl").
 -include("mod_mam.hrl").
+-include("pubsub.hrl").
 
 -define(DEF_PAGE_SIZE, 50).
 -define(MAX_PAGE_SIZE, 250).
@@ -333,6 +335,16 @@ muc_process_iq(#iq{type = get,
 muc_process_iq(IQ, _MUCState) ->
     IQ.
 
+-spec pubsub_process_iq(ignore | iq(), mod_pubsub:pubsubState()) -> ignore | iq().
+pubsub_process_iq(#iq{to = To, type = set, sub_els = [#xmlel{name = <<"query">>}]} = IQ,
+				  PubSubState) ->
+	LServer = To#jid.lserver,
+    process_iq(LServer, IQ, PubSubState);
+pubsub_process_iq(ignore, _PubSubState) ->
+    ignore;
+pubsub_process_iq(IQ, _PubSubState) ->
+    xmpp:make_error(IQ, ?ERR_FEATURE_NOT_IMPLEMENTED).
+
 parse_query(#mam_query{xmlns = ?NS_MAM_TMP,
 		       start = Start, 'end' = End,
 		       with = With, withtext = Text}, _Lang) ->
@@ -460,7 +472,9 @@ process_iq(LServer, #iq{from = #jid{luser = LUser}, lang = Lang,
     case MsgType of
 	chat ->
 	    maybe_activate_mam(LUser, LServer);
-	{groupchat, _Role, _MUCState} ->
+	{groupchat, _Role, #pubsub_state{} = _PubSubState} ->
+		ok;
+	{groupchat, _Role, #state{} = _MUCState} ->
 	    ok
     end,
     case SubEl of
@@ -771,10 +785,15 @@ maybe_activate_mam(LUser, LServer) ->
 select_and_send(LServer, Query, RSM, #iq{from = From, to = To} = IQ, MsgType) ->
     {Msgs, IsComplete, Count} =
 	case MsgType of
-	    chat ->
+	chat ->
 		select(LServer, From, From, Query, RSM, MsgType);
-	    {groupchat, _Role, _MUCState} ->
-		select(LServer, From, To, Query, RSM, MsgType)
+	{groupchat, _Role, #state{} = _MUCState} ->
+		select(LServer, From, To, Query, RSM, MsgType);
+	{groupchat, _Role, #pubsub_state{} = _PubSubState} ->
+		[SubEl] = IQ#iq.sub_els,
+    	NodeName = fxml:get_attr_s(<<"node">>, SubEl#xmlel.attrs),
+    	Node = jid:make({NodeName, LServer, <<>>}),
+		select(LServer, From, Node, Query, RSM, MsgType)
 	end,
     SortedMsgs = lists:keysort(2, Msgs),
     send(SortedMsgs, Count, IsComplete, IQ).
@@ -863,6 +882,8 @@ maybe_update_from_to(#message{sub_els = Els} = Pkt, JidRequestor, JidArchive,
     Pkt#message{from = jid:replace_resource(JidArchive, Nick),
 		to = undefined,
 		sub_els = Items ++ Els};
+maybe_update_from_to(Pkt, _JidRequestor, _JidArchive, _Peer, {groupchat, none, #pubsub_state{}}, _Nick) ->
+    Pkt;
 maybe_update_from_to(Pkt, _JidRequestor, _JidArchive, _Peer, chat, _Nick) ->
     Pkt.
 

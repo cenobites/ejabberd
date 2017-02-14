@@ -320,6 +320,10 @@ init([ServerHost, Opts]) ->
 				  ?MODULE, process_vcard, IQDisc),
     gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_COMMANDS,
 				  ?MODULE, process_commands, IQDisc),
+    gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_MAM_0,
+				  ?MODULE, process_mam, IQDisc),
+    gen_iq_handler:add_iq_handler(ejabberd_local, Host, ?NS_MAM_1,
+				  ?MODULE, process_mam, IQDisc),
     case lists:member(?PEPNODE, Plugins) of
 	true ->
 	    ejabberd_hooks:add(caps_add, ServerHost,
@@ -930,6 +934,8 @@ terminate(_Reason,
     gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_PUBSUB_OWNER),
     gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_VCARD),
     gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_COMMANDS),
+    gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_MAM_0),
+    gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_MAM_1),
     case whereis(gen_mod:get_module_proc(ServerHost, ?LOOPNAME)) of
 	undefined ->
 	    ?ERROR_MSG("~s process is dead, pubsub was broken", [?LOOPNAME]);
@@ -1026,6 +1032,18 @@ process_commands(#iq{type = set, to = To, from = From,
     end;
 process_commands(#iq{type = get, lang = Lang} = IQ) ->
     Txt = <<"Value 'get' of 'type' attribute is not allowed">>,
+    xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang)).
+
+-spec process_mam(iq()) -> iq().
+process_mam(#iq{type = set, to = To, from = From} = IQ) ->
+    case mod_mam:pubsub_process_iq(IQ, #pubsub_state{}) of
+	#iq{type = result, sub_el = SubEl} -> 
+		xmpp:make_iq_result(IQ, SubEl);
+	_ ->
+		xmpp:make_error(IQ, ?ERR_FEATURE_NOT_IMPLEMENTED)
+	end;
+process_mam(IQ) ->
+	Txt = <<"Value 'get' of 'type' attribute is not allowed">>,
     xmpp:make_error(IQ, xmpp:err_not_allowed(Txt, Lang)).
 
 -spec do_route(binary(), jid(), jid(), stanza()) -> ok.
